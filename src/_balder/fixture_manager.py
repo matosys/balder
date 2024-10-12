@@ -1,17 +1,16 @@
 from __future__ import annotations
-from typing import List, Tuple, Generator, Dict, Union, Type, Callable, TYPE_CHECKING
+from typing import List, Tuple, Generator, Dict, Union, Type, Callable, Iterable, TYPE_CHECKING
 
 import inspect
 from graphlib import TopologicalSorter
 
-from _balder.executor.abstract_testcase_executor import AbstractTestcaseExecutor
 from _balder.executor.testcase_executor import TestcaseExecutor
 from _balder.scenario import Scenario
 from _balder.setup import Setup
 from _balder.fixture_definition_scope import FixtureDefinitionScope
 from _balder.fixture_execution_level import FixtureExecutionLevel
 from _balder.fixture_metadata import FixtureMetadata
-from _balder.executor.basic_executor import BasicExecutor
+from _balder.executor.executor_tree import ExecutorTree
 from _balder.executor.setup_executor import SetupExecutor
 from _balder.executor.scenario_executor import ScenarioExecutor
 from _balder.executor.variation_executor import VariationExecutor
@@ -20,7 +19,6 @@ from _balder.exceptions import LostInExecutorTreeException, FixtureReferenceErro
 
 if TYPE_CHECKING:
     from _balder.utils import MethodLiteralType
-    from _balder.executor.executor_tree import ExecutorTree
 
 
 class FixtureManager:
@@ -195,7 +193,10 @@ class FixtureManager:
         # determine namespaces (in the correct order)
         setup_type = None
         scenario_type = None
-        if isinstance(from_branch, SetupExecutor):
+        if isinstance(from_branch, ExecutorTree):
+            # no types can be determined here
+            pass
+        elif isinstance(from_branch, SetupExecutor):
             setup_type = from_branch.base_setup_class.__class__
             # normally the scenario is None - only if the current namespace is a scenario we can use it
             if callable_func_namespace is not None and issubclass(callable_func_namespace, Scenario):
@@ -208,33 +209,35 @@ class FixtureManager:
         elif isinstance(from_branch, VariationExecutor):
             setup_type = from_branch.cur_setup_class.__class__
             scenario_type = from_branch.cur_scenario_class.__class__
-        elif isinstance(from_branch, AbstractTestcaseExecutor):
+        elif isinstance(from_branch, TestcaseExecutor):
             setup_type = from_branch.parent_executor.cur_setup_class.__class__
             scenario_type = from_branch.parent_executor.cur_scenario_class.__class__
+        else:
+            raise TypeError(f"can not determine setup and scenario type for {from_branch}")
         return setup_type, scenario_type
 
     # ---------------------------------- METHODS -----------------------------------------------------------------------
 
     def is_allowed_to_enter(
-            self, branch: Union[BasicExecutor, ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor,
-                                TestcaseExecutor]) -> bool:
+            self,
+            branch: Union[ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor, TestcaseExecutor]
+    ) -> bool:
         """
         This method return true if the given branch can be entered, otherwise false
         """
         return branch.fixture_execution_level not in self.current_tree_fixtures.keys()
 
     def is_allowed_to_leave(
-            self, branch: Union[BasicExecutor, ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor,
-                                TestcaseExecutor]) \
-            -> bool:
+        self,
+        branch: Union[ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor, TestcaseExecutor]
+    ) -> bool:
         """
         This method returns true if the given branch can be left now (there exist entries from earlier run enter()
         for this branch), otherwise false
         """
         return branch.fixture_execution_level in self.current_tree_fixtures.keys()
 
-    def enter(self, branch: Union[BasicExecutor, ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor,
-                                  TestcaseExecutor]):
+    def enter(self, branch: Union[ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor, TestcaseExecutor]):
         """
         With this method you enter a branch for the fixture manager in order to execute the fixtures contained in it
 
@@ -294,8 +297,7 @@ class FixtureManager:
                     pass
                 # every other exception that is thrown, will be recognized and rethrown
 
-    def leave(self, branch: Union[BasicExecutor, ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor,
-                                  TestcaseExecutor]):
+    def leave(self, branch: Union[ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor, TestcaseExecutor]):
         """
         With this method you leave a previously entered branch and execute the teardown code of the fixtures. Note that
         you can only leave the branch that you entered before!
@@ -328,7 +330,7 @@ class FixtureManager:
     def get_all_attribute_values(
             self, branch: Union[ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor, TestcaseExecutor],
             callable_func_namespace: Union[None, Type[Scenario], Type[Setup]], callable_func: Callable,
-            func_type: str) -> Dict[str, object]:
+            func_type: str, ignore_attributes: Iterable[str] = None) -> Dict[str, object]:
         """
         This method tries to fill the unresolved function/method arguments of the given fixture callable. For this it
         searches the return values of all already executed fixtures and supplies the argument values of the
@@ -341,22 +343,22 @@ class FixtureManager:
         any references, it will look in the next higher scope. It only uses fixture that has run before!
 
         :param branch: the current active branch
-
         :param callable_func_namespace: the namespace of the current fixture or `None` if it is defined in balderglob
                                         file
-
         :param callable_func: the callable with the arguments
-
         :param func_type: returns the func_type of the fixture - depending on this value the first argument will be
                           ignored, because it has to be `cls` for `classmethod` and `self` for `instancemethod`
-
+        :param ignore_attributes: holds a list of attributes in the test method that should be ignored
         :return: the method returns a dictionary with the attribute name as key and the return value as value
+
         """
         arguments = inspect.getfullargspec(callable_func).args
         result_dict = {}
 
         if func_type in ["classmethod", "instancemethod"]:
             arguments = arguments[1:]
+        if ignore_attributes is None:
+            ignore_attributes = []
 
         self._validate_for_unclear_setup_scoped_fixture_reference(
             callable_func_namespace, callable_func, arguments, cur_execution_level=branch.fixture_execution_level)
@@ -373,6 +375,8 @@ class FixtureManager:
                 all_possible_namespaces.append(scenario_type)
 
         for cur_arg in arguments:
+            if cur_arg in ignore_attributes:
+                continue
             # go to the most specific fixture, because more specific ones overwrite the more global ones
             for cur_possible_namespace in all_possible_namespaces:
                 for cur_level in FixtureExecutionLevel:
