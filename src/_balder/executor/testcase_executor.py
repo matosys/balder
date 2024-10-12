@@ -1,30 +1,36 @@
 from __future__ import annotations
-from typing import List, Union, TYPE_CHECKING
+from typing import List, TYPE_CHECKING
 
 import sys
 import time
 import traceback
 
-from _balder.executor.basic_executor import BasicExecutor
+from _balder.executor.basic_executable_executor import BasicExecutableExecutor
 from _balder.fixture_execution_level import FixtureExecutionLevel
 from _balder.previous_executor_mark import PreviousExecutorMark
 from _balder.testresult import ResultState, TestcaseResult
 from _balder.utils import inspect_method
 
 if TYPE_CHECKING:
+    from _balder.executor.unresolved_parametrized_testcase_executor import UnresolvedParametrizedTestcaseExecutor
     from _balder.executor.variation_executor import VariationExecutor
     from _balder.fixture_manager import FixtureManager
     from _balder.scenario import Scenario
 
 
-class TestcaseExecutor(BasicExecutor):
+class TestcaseExecutor(BasicExecutableExecutor):
     """
     A TestcaseExecutor class represents an actual single test that can be executed. It therefore references exactly to a
     test method of a scenario that can be executed on the specific setup this executor belongs to.
     """
+
     fixture_execution_level = FixtureExecutionLevel.TESTCASE
 
-    def __init__(self, testcase: callable, parent: VariationExecutor):
+    def __init__(
+            self,
+            testcase: callable,
+            parent: VariationExecutor | UnresolvedParametrizedTestcaseExecutor,
+    ) -> None:
         super().__init__()
 
         self._base_testcase_callable = testcase
@@ -54,10 +60,6 @@ class TestcaseExecutor(BasicExecutor):
     # ---------------------------------- PROPERTIES --------------------------------------------------------------------
 
     @property
-    def all_child_executors(self) -> None:
-        return None
-
-    @property
     def parent_executor(self) -> VariationExecutor:
         return self._parent_executor
 
@@ -73,21 +75,32 @@ class TestcaseExecutor(BasicExecutor):
         return self._base_testcase_callable
 
     @property
+    def all_child_executors(self) -> None:
+        return None
+
+    @property
     def base_testcase_obj(self) -> Scenario:
         """
         return the testcase Scenario this testcase is defined in
         """
-        return self._parent_executor.cur_scenario_class
+        return self.parent_executor.cur_scenario_class
 
     @property
     def fixture_manager(self):
         """returns the current active fixture manager"""
         return self._fixture_manager
 
+    @property
+    def full_test_name_str(self) -> str:
+        """
+        returns the name of the test method, that should be used in output
+        """
+        return self._base_testcase_callable.__qualname__
+
     # ---------------------------------- PROTECTED METHODS -------------------------------------------------------------
 
     def _prepare_execution(self, show_discarded):
-        print(f"      TEST {self.base_testcase_callable.__qualname__} ", end='')
+        print(f"      TEST {self.full_test_name_str} ", end='')
         if self.should_be_skipped():
             self.body_result.set_result(ResultState.SKIP)
             self.execution_time_sec = 0
@@ -97,8 +110,7 @@ class TestcaseExecutor(BasicExecutor):
         start_time = time.perf_counter()
         try:
             _, func_type = inspect_method(self.base_testcase_callable)
-            all_args = self.fixture_manager.get_all_attribute_values(
-                self, self.base_testcase_obj.__class__, self.base_testcase_callable, func_type)
+            all_args = self.get_all_test_method_args()
             if func_type == "staticmethod":
                 # testcase is a staticmethod - no special first attribute
                 self.base_testcase_callable(**all_args)
@@ -141,15 +153,7 @@ class TestcaseExecutor(BasicExecutor):
             return True
         return False
 
-    def cleanup_empty_executor_branches(self, consider_discarded=False):
-        """
-        This method searches the whole tree and removes branches where an executor item has no own children. It can
-        remove these branches, because they have no valid matchings.
-
-        This method implementation of the :class:`TestcaseExecutor` does nothing.
-        """
-
-    def get_covered_by_element(self) -> List[Union[Scenario, callable]]:
+    def get_covered_by_element(self) -> List[Scenario | callable]:
         """
         This method returns a list of elements where the whole scenario is covered from. This means, that the whole
         test methods in this scenario are already be covered from every single element in the list.
@@ -163,3 +167,23 @@ class TestcaseExecutor(BasicExecutor):
         if scenario_class in covered_by_dict_resolved.keys():
             all_covered_by_data += covered_by_dict_resolved[scenario_class]
         return all_covered_by_data
+
+    def get_all_test_method_args(self):
+        """
+        returns all kwargs values for the test method
+        """
+        _, func_type = inspect_method(self.base_testcase_callable)
+        return self.fixture_manager.get_all_attribute_values(
+            self,
+            self.base_testcase_obj.__class__,
+            self.base_testcase_callable,
+            func_type
+        )
+
+    def cleanup_empty_executor_branches(self, consider_discarded=False):
+        """
+        This method searches the whole tree and removes branches where an executor item has no own children. It can
+        remove these branches, because they have no valid matchings.
+
+        This method implementation of the :class:`TestcaseExecutor` does nothing.
+        """

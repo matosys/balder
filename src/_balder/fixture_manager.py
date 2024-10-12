@@ -3,6 +3,8 @@ from typing import List, Tuple, Generator, Dict, Union, Type, Callable, TYPE_CHE
 
 import inspect
 from graphlib import TopologicalSorter
+
+from _balder.executor.abstract_testcase_executor import AbstractTestcaseExecutor
 from _balder.executor.testcase_executor import TestcaseExecutor
 from _balder.scenario import Scenario
 from _balder.setup import Setup
@@ -206,7 +208,7 @@ class FixtureManager:
         elif isinstance(from_branch, VariationExecutor):
             setup_type = from_branch.cur_setup_class.__class__
             scenario_type = from_branch.cur_scenario_class.__class__
-        elif isinstance(from_branch, TestcaseExecutor):
+        elif isinstance(from_branch, AbstractTestcaseExecutor):
             setup_type = from_branch.parent_executor.cur_setup_class.__class__
             scenario_type = from_branch.parent_executor.cur_scenario_class.__class__
         return setup_type, scenario_type
