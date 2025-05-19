@@ -400,11 +400,10 @@ class FixtureManager:
         :param parent_classes: true if the method should look for fixtures in parent classes too
         :return: list with all fixtures that are matching search criteria
         """
-        # get all fixtures of the current relevant level (only `execution_level` is relevant - all other levels are
-        # not relevant for this call)
-        fixtures_of_exec_level = self.fixtures.get(execution_level, {})
-        if setup_or_scenario_class is not None and parent_classes:
+        # go through MRO and request all fixtures from there - then only return the overwritten versions
+        if parent_classes and setup_or_scenario_class is not None:
             all_fixtures = []
+            # getmro returns the method resolution order (at least if type is scenario/setup type is not overwritten)
             for cur_parent_class in inspect.getmro(setup_or_scenario_class):
                 if issubclass(cur_parent_class, (Scenario, Setup)):
                     all_fixtures += self.get_fixture_for_class(execution_level, cur_parent_class, False)
@@ -416,7 +415,10 @@ class FixtureManager:
                     _added_fixtures.append(cur_fixture_tuple[1].__name__)
                     remaining_fixtures.append(cur_fixture_tuple)
             return remaining_fixtures
-        return fixtures_of_exec_level.get(setup_or_scenario_class, [])
+
+        # get all fixtures of the current relevant level (only `execution_level` is relevant - all other levels are
+        # not relevant for this call)
+        return self.fixtures.get(execution_level, {}).get(setup_or_scenario_class, [])
 
     def get_all_fixtures_for_current_level(
             self, branch: Union[ExecutorTree, SetupExecutor, ScenarioExecutor, VariationExecutor, TestcaseExecutor]) \
